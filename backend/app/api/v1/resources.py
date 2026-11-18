@@ -12,10 +12,10 @@
 `api/v1/files.py:to_file_out`）—— 两个页面对"什么是一份资料"必须说同一套话。
 """
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 from fastapi import APIRouter, BackgroundTasks, Depends, Query
-from sqlalchemy import Select, func, select
+from sqlalchemy import Select, case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -47,6 +47,16 @@ router = APIRouter(tags=["resources"])
 _EPOCH = datetime(1970, 1, 1)
 
 
+def _first_synced():
+    """这门课第一次同步完的时刻。没有水位线行 = 还没同步完过一轮 → NULL；
+    有行但没记（迁移之前的老行）→ 当作很早，"第一次收到"照旧算数。"""
+    return (
+        select(func.coalesce(CourseViewState.first_synced_at, _EPOCH))
+        .where(CourseViewState.course_id == CourseFile.course_id)
+        .scalar_subquery()
+    )
+
+
 def _changed_at():
     """"这份资料最后一次变动"的 SQL 表达式 = max(第一次被收到, Canvas 更新时间)。
 
@@ -54,18 +64,35 @@ def _changed_at():
     挂进来），而一个**被改过**的老文件 first_seen_at 停在上个月。只看任何一个
     都会漏掉一半"最新"。
 
+    但**第一次同步收进来的不算"收到"**：那一轮的 first_seen_at 全是同步那一刻，
+    算进去的话装好软件当天「今天」「本周」会把整个学期列出来。所以 first_seen_at
+    只有晚于这门课第一次同步完的时刻才算数 —— 和"首次同步不产生提醒"同一条规则。
+
     `func.max` 在 SQLite 里是标量 max（两个参数）。换 Postgres 要改成 GREATEST。
     """
-    return func.max(
-        func.coalesce(CourseFile.first_seen_at, _EPOCH),
-        func.coalesce(CourseFile.canvas_updated_at, _EPOCH),
+    received = case(
+        (CourseFile.first_seen_at > _first_synced(), CourseFile.first_seen_at),
+        else_=_EPOCH,
     )
+    return func.max(received, func.coalesce(CourseFile.canvas_updated_at, _EPOCH))
 
 
-def _changed_at_of(file: CourseFile) -> datetime | None:
-    """同一件事在 Python 侧的版本，给响应里的 changed_at 用。"""
-    stamps = [t for t in (file.first_seen_at, file.canvas_updated_at) if t is not None]
-    return max(stamps) if stamps else None
+def _utc(value: datetime) -> datetime:
+    return value if value.tzinfo else value.replace(tzinfo=UTC)
+
+
+#: 课程没有水位线行（还没同步完过）。和"有行但没记时间"要分开
+_NO_BASELINE = object()
+
+
+def _changed_at_of(file: CourseFile, first_synced) -> datetime | None:
+    """同一件事在 Python 侧的版本，给响应里的 changed_at 用。
+    `first_synced` 是这门课的 first_synced_at，没有水位线行时传 _NO_BASELINE。"""
+    stamps = [file.canvas_updated_at] if file.canvas_updated_at is not None else []
+    if file.first_seen_at is not None and first_synced is not _NO_BASELINE:
+        if first_synced is None or _utc(file.first_seen_at) > _utc(first_synced):
+            stamps.append(file.first_seen_at)
+    return max(stamps, key=_utc) if stamps else None
 
 
 def _unseen_clause():
@@ -190,6 +217,16 @@ async def _serialize(
         ).all()
     }
 
+    baselines = dict(
+        (
+            await db.execute(
+                select(CourseViewState.course_id, CourseViewState.first_synced_at).where(
+                    CourseViewState.course_id.in_({f.course_id for f in files})
+                )
+            )
+        ).all()
+    )
+
     out: list[FileOut] = []
     for f in files:
         canvas_id, name, code = courses.get(f.course_id, (None, None, None))
@@ -199,7 +236,7 @@ async def _serialize(
         # 全局列表里一行必须自己说清"这是哪门课的"
         item.course_name = name
         item.course_code = code
-        item.changed_at = _changed_at_of(f)
+        item.changed_at = _changed_at_of(f, baselines.get(f.course_id, _NO_BASELINE))
         out.append(item)
     return out
 

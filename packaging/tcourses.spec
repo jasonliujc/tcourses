@@ -12,6 +12,7 @@ from PyInstaller.utils.hooks import collect_submodules
 ROOT = Path(SPECPATH).resolve().parent
 BACKEND = ROOT / "backend"
 WEB = ROOT / "frontend" / "dist"
+ICON = ROOT / "packaging" / ("icon.icns" if sys.platform == "darwin" else "icon.ico")
 
 if not (WEB / "index.html").is_file():
     raise SystemExit("frontend/dist is missing: run `npm run build` in frontend/ first")
@@ -29,7 +30,8 @@ def analysis(script):
         pathex=[str(BACKEND)],
         datas=[(str(WEB), "web")],
         hiddenimports=hidden,
-        excludes=["tkinter", "pytest", "ruff"],
+        # Pillow is only for packaging/make_icon.py, never at runtime
+        excludes=["tkinter", "pytest", "ruff", "PIL"],
     )
 
 
@@ -42,6 +44,7 @@ def exe(a, name):
         name=name,
         console=False,
         upx=False,
+        icon=str(ICON),
     )
 
 
@@ -50,7 +53,7 @@ main_exe = exe(main, "TCourses")
 
 if sys.platform == "darwin":
     coll = COLLECT(main_exe, main.binaries, main.datas, name="TCourses")
-    app = BUNDLE(coll, name="TCourses.app", bundle_identifier="io.github.tcourses")
+    app = BUNDLE(coll, name="TCourses.app", icon=str(ICON), bundle_identifier="io.github.tcourses")
 else:
     demo = analysis("launch_demo.py")
     demo_exe = exe(demo, "TCourses Demo")

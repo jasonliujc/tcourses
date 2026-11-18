@@ -15,14 +15,14 @@ import logging
 from datetime import UTC, datetime, time, timedelta
 
 import httpx
-from sqlalchemy import func, select, update
+from sqlalchemy import select
 
 from app.db.session import SessionLocal
 from app.demo.semester import BASE_URL, USER, Semester
 from app.demo.transport import DemoCanvas
 from app.integrations.canvas import client as canvas_client
 from app.models.course import Course
-from app.models.file import CourseFile, FileSource
+from app.models.file import CourseFile
 from app.models.planner import PlannerItem
 from app.services import canvas_connection
 from app.services.canvas_connection import Account
@@ -46,8 +46,6 @@ async def prepare() -> None:
         await db.commit()
 
     await sync_manager.run_sync(reschedule=False)
-    term_start = datetime.combine(demo.semester.term_start, time(9), tzinfo=demo.semester.local)
-    await _as_if_running_all_term(term_start.astimezone(UTC))
     demo.set_stage(1)
     await sync_manager.run_sync(reschedule=False)
 
@@ -57,29 +55,6 @@ async def prepare() -> None:
     async with httpx.AsyncClient(transport=transport, base_url="http://demo") as api:
         await _seed_user_data(api, demo.semester)
     logger.info("演示数据就绪")
-
-
-async def _as_if_running_all_term(term_start: datetime) -> None:
-    """第一轮同步收进来的东西，"第一次见到"的时间改成它在 Canvas 上出现的时间。
-
-    真实用户的应用是整个学期一直开着的；不改的话演示里所有文件都是"今天才收到"，
-    「今天」「本周」两个框会把整个学期的资料全列出来。链接没有 Canvas 时间，
-    取它最早出现的那条来源的日期，再没有就算开学那天。
-    """
-    earliest_source = (
-        select(func.min(FileSource.source_date))
-        .where(FileSource.file_id == CourseFile.id)
-        .scalar_subquery()
-    )
-    async with SessionLocal() as db:
-        await db.execute(
-            update(CourseFile).values(
-                first_seen_at=func.coalesce(
-                    CourseFile.canvas_updated_at, earliest_source, term_start
-                )
-            )
-        )
-        await db.commit()
 
 
 async def _ids(model, column, names: list[str]) -> dict[str, int]:

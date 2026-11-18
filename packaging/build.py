@@ -6,13 +6,15 @@
 
 from __future__ import annotations
 
+import os
 import platform
 import shutil
 import subprocess
 import sys
-import tomllib
 import zipfile
 from pathlib import Path
+
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 DIST = ROOT / "dist"
@@ -24,6 +26,10 @@ def run(cmd: list[str], cwd: Path) -> None:
 
 
 def version() -> str:
+    """Release builds take the version from the tag (v0.1.0-beta.1 -> 0.1.0-beta.1)."""
+    tag = os.environ.get("GITHUB_REF_NAME", "")
+    if os.environ.get("GITHUB_REF_TYPE") == "tag" and tag.startswith("v"):
+        return tag[1:]
     with open(ROOT / "backend" / "pyproject.toml", "rb") as fh:
         return tomllib.load(fh)["project"]["version"]
 

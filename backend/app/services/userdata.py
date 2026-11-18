@@ -133,15 +133,24 @@ async def ensure_view_state(db: AsyncSession, course_id: int) -> CourseViewState
         await db.execute(select(CourseViewState).where(CourseViewState.course_id == course_id))
     ).scalar_one_or_none()
     if state is None:
-        state = CourseViewState(course_id=course_id, seen_at=datetime.now(UTC))
+        now = datetime.now(UTC)
+        state = CourseViewState(course_id=course_id, seen_at=now, first_synced_at=now)
         db.add(state)
         await db.flush()
     return state
 
 
 async def mark_course_seen(db: AsyncSession, course_id: int) -> None:
-    """把一门课的水位线推到现在。用户打开这门课的资源页就算。"""
-    state = await ensure_view_state(db, course_id)
+    """把一门课的水位线推到现在。用户打开这门课的资源页就算。
+
+    还没同步完过的课不建水位线：建了的话"第一次同步完"的时刻就会早于这一轮
+    还没收完的文件，它们会被当成新东西。同步完时会以那一刻为初值建出来。
+    """
+    state = (
+        await db.execute(select(CourseViewState).where(CourseViewState.course_id == course_id))
+    ).scalar_one_or_none()
+    if state is None:
+        return
     state.seen_at = datetime.now(UTC)
     await db.flush()
 

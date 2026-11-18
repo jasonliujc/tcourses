@@ -95,6 +95,10 @@ class CourseViewState(Base, TimestampMixin):
         ForeignKey("courses.id", ondelete="CASCADE"), unique=True, index=True, nullable=False
     )
     seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    #: 这门课第一次同步完的时刻，之后不再变。那一轮收进来的东西"第一次收到"的时间
+    #: 就是同步那一刻，不代表它是新的 —— 「今天」「本周」只看它在 Canvas 上的时间。
+    #: 不用 created_at：那是数据库填的整秒，和带微秒的 first_seen_at 比会差出一秒
+    first_synced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class UserGroup(Base, TimestampMixin):

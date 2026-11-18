@@ -247,6 +247,61 @@ async def test_summary_counts_match_the_lists(client, library):
     assert summary["total"] == 5
 
 
+# ---------- 第一次同步收进来的不算"新" ----------
+
+
+async def _first_sync_at(db, course, when):
+    state = (
+        await db.execute(select(CourseViewState).where(CourseViewState.course_id == course.id))
+    ).scalar_one()
+    state.first_synced_at = when
+    await db.commit()
+
+
+async def test_files_from_the_first_sync_are_not_new_today(client, library, db):
+    """装好软件第一次同步：那一轮收进来的整个学期，「今天」里只该有今天真的变过的。"""
+    # A 的第一次同步就在刚才：a-new 是那一轮收进来的，Canvas 上没有时间
+    await _first_sync_at(db, library["a"], NOW + timedelta(seconds=30))
+    today = await _names(client, f"since={_iso(NOW)}")
+    assert today == ["a-changed.pdf"]  # Canvas 今天改过它，照样算
+
+
+async def test_files_received_after_the_first_sync_are_new(client, library, db):
+    await _first_sync_at(db, library["a"], LAST_WEEK + timedelta(hours=1))
+    today = await _names(client, f"since={_iso(NOW)}")
+    assert today == ["a-changed.pdf", "a-new.pdf"]
+
+
+async def test_changed_at_in_the_response_follows_the_same_rule(client, library, db):
+    await _first_sync_at(db, library["a"], NOW + timedelta(seconds=30))
+    rows = (await client.get("/api/v1/resources?sort_by=changed")).json()
+    new = next(r for r in rows if r["display_name"] == "a-new.pdf")
+    assert new["changed_at"] is None  # 只有"第一次收到"，而它不算
+
+
+async def test_course_still_in_its_first_sync_has_nothing_new(client, library, db):
+    """没有水位线行 = 第一次同步还没跑完，收到一半的东西不能算新。"""
+    await db.execute(
+        CourseViewState.__table__.delete().where(CourseViewState.course_id == library["a"].id)
+    )
+    await db.commit()
+    today = await _names(client, f"since={_iso(NOW)}")
+    assert today == ["a-changed.pdf"]
+
+
+async def test_opening_a_course_before_its_first_sync_does_not_start_the_clock(db, library):
+    await db.execute(
+        CourseViewState.__table__.delete().where(CourseViewState.course_id == library["a"].id)
+    )
+    await db.flush()
+    await userdata.mark_course_seen(db, library["a"].id)
+    query = select(CourseViewState).where(CourseViewState.course_id == library["a"].id)
+    assert (await db.execute(query)).all() == []
+    # 同步完时建出来的那一行，两个时刻都是那一刻
+    state = await userdata.ensure_view_state(db, library["a"].id)
+    assert state.first_synced_at == state.seen_at
+
+
 # ---------- 星标 ----------
 
 

@@ -48,6 +48,8 @@ _ADDED_COLUMNS: list[tuple[str, str, str]] = [
     ("planner_overlays", "end_at", "DATETIME"),
     ("planner_overlays", "location", "VARCHAR(500)"),
     ("planner_overlays", "important", "BOOLEAN NOT NULL DEFAULT 0"),
+    # 每门课第一次同步完的时刻。老库按水位线那一行的建立时间回填（见 _BACKFILLS）
+    ("course_view_states", "first_synced_at", "DATETIME"),
 ]
 
 # 老库里 resource_key 是空的，按老的身份回填：那时候一行就是一个 Canvas 文件。
@@ -57,6 +59,10 @@ _BACKFILLS: list[tuple[str, str]] = [
         "course_files",
         "UPDATE course_files SET resource_key = 'file:' || canvas_id "
         "WHERE resource_key IS NULL OR resource_key = ''",
+    ),
+    (
+        "course_view_states",
+        "UPDATE course_view_states SET first_synced_at = created_at WHERE first_synced_at IS NULL",
     ),
 ]
 
